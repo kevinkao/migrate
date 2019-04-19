@@ -1,0 +1,20 @@
+version: "3"
+
+services:
+    web:
+        image: kevinkao/nginx-golang
+        volumes:
+            - ./src:/go/src
+        ports:
+            - "8383:80"
+        links:
+            - db
+
+    db:
+        image: mariadb:10.2
+        volumes:
+            - ./docker/db:/var/lib/mysql
+        environment:
+            - MYSQL_DATABASE=develop
+            - MYSQL_ROOT_PASSWORD=123456
+
