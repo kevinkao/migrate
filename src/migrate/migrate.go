@@ -116,11 +116,9 @@ func main () {
 					panic(err)
 				}
 
-				affected, err := result.RowsAffected()
-				if err != nil {
+				if _, err := result.RowsAffected(); err != nil {
 					panic(err)
 				}
-				fmt.Println("Rows affected %d", affected)
 				UpdateVersionNumber(version)
 			}
 
@@ -128,9 +126,62 @@ func main () {
 		},
 	}
 
-	  var rootCmd = &cobra.Command{Use: "migrate"}
-	  rootCmd.AddCommand(cmdMigrate)
-	  rootCmd.Execute()	
+	var cmdRollback = &cobra.Command{
+		Use:   "down",
+		Short: "Rollback migraion",
+		Run: func(cmd *cobra.Command, args []string) {
+			tx, err := db.Begin()
+			if err != err {
+				panic(err)
+			}
+			
+			defer func () {
+				if p := recover(); p != nil {
+					tx.Rollback()
+					panic(p)
+				}
+			}()
+
+			for v := currentVersion; v > 0; v-- {
+				downfile := fmt.Sprintf("%s/%d.down.sql", migrationFolder, v)
+				if !FileExists(downfile) {
+					panic(fmt.Sprintf("No such %s", downfile))
+				}
+				fmt.Println(downfile)
+
+				content, err := ioutil.ReadFile(downfile)
+				if err != nil {
+					panic(err)
+				}
+
+				stmt, err := db.Prepare(string(content))
+				if err != nil {
+					panic(err)
+				}
+
+				result, err := stmt.Exec()
+				if err != nil {
+					panic(err)
+				}
+
+				if _, err := result.RowsAffected(); err != nil {
+					panic(err)
+				}
+				UpdateVersionNumber(v)
+			}
+
+			if err := os.Remove(versionFile); err != nil {
+				panic(err)
+			}
+
+			err = tx.Commit()
+		},
+	}
+
+	var rootCmd = &cobra.Command{Use: "migrate"}
+	rootCmd.AddCommand(cmdMigrate)
+	rootCmd.AddCommand(cmdRollback)
+	rootCmd.Execute()	
 }
 
 func DbConn () (*sql.DB, error) {
