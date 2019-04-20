@@ -10,3 +10,6 @@ up: build
 
 down: build
 	./bin/migrate down
+
+fresh: build
+	./bin/migrate fresh

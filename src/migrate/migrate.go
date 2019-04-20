@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"github.com/spf13/cobra"
+	"strings"
 )
 
 var databaseFolder string
@@ -61,7 +62,7 @@ func main () {
 
 	defer db.Close()
 
-	var cmdMigrate = &cobra.Command{
+	var cmdUp = &cobra.Command{
 		Use:   "up",
 		Short: "Start to exexcute sql file by sequence.",
 		Run: func(cmd *cobra.Command, args []string) {
@@ -106,12 +107,7 @@ func main () {
 					panic(err)
 				}
 
-				stmt, err := db.Prepare(string(content))
-				if err != nil {
-					panic(err)
-				}
-
-				result, err := stmt.Exec()
+				result, err := db.Exec(string(content))
 				if err != nil {
 					panic(err)
 				}
@@ -178,16 +174,48 @@ func main () {
 		},
 	}
 
+	var cmdFresh = &cobra.Command{
+		Use:   "fresh",
+		Short: "Drop all tables and run up sql files",
+		Run: func(cmd *cobra.Command, args []string) {
+			stmt, err := db.Prepare("SELECT table_name FROM information_schema.tables WHERE table_schema = ?")
+			if err != nil {
+				panic(err)
+			}
+
+			rows, err := stmt.Query(GetConfig("database"))
+			if err != nil {
+				panic(err)
+			}
+
+			var tables []string
+			for rows.Next() {
+				var tableName string
+				if err := rows.Scan(&tableName); err != nil {
+					fmt.Println(err)
+				}
+				tables = append(tables, tableName)
+			}
+
+			if len(tables) == 0 {
+				return
+			}
+
+			fmt.Printf("Drop tables [%s]\n", strings.Join(tables, ", "))
+		},
+	}
+
 	var rootCmd = &cobra.Command{Use: "migrate"}
-	rootCmd.AddCommand(cmdMigrate)
+	rootCmd.AddCommand(cmdUp)
 	rootCmd.AddCommand(cmdRollback)
+	rootCmd.AddCommand(cmdFresh)
 	rootCmd.Execute()	
 }
 
 func DbConn () (*sql.DB, error) {
 	mk := viper.GetString("default")
 	dsn := fmt.Sprintf(
-			"%s:%s@tcp(%s:%s)/%s?parseTime=True&charset=%s",
+			"%s:%s@tcp(%s:%s)/%s?parseTime=true&multiStatements=true&charset=%s",
 			viper.GetString(mk+".username"),
 			viper.GetString(mk+".password"),
 			viper.GetString(mk+".host"),
@@ -200,6 +228,13 @@ func DbConn () (*sql.DB, error) {
 		panic(err)
 	}
 	return db, err
+}
+
+func GetConfig (key string, defaultValue ...interface {}) (interface {}) {
+	mk := viper.GetString("default")
+	k := fmt.Sprintf(mk+".%s", key)
+	viper.SetDefault(k, defaultValue)
+	return viper.GetString(k)
 }
 
 func UpdateVersionNumber(number int64) {
