@@ -5,10 +5,15 @@ services:
         image: kevinkao/nginx-golang
         volumes:
             - ./src:/go/src
+            - ./database:/go/database
+            - ./Makefile:/go/Makefile
+            - ./config:/go/config
         ports:
             - "8383:80"
         links:
             - db
+        environment:
+            - TZ=Asia/Taipei
 
     db:
         image: mariadb:10.2
