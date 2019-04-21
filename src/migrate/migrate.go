@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"github.com/spf13/cobra"
 	"strings"
+	"github.com/manifoldco/promptui"
+	"errors"
 )
 
 var databaseFolder string
@@ -18,6 +20,7 @@ var migrationFolder string
 var configFolder string
 var dbEnvConfig string
 var versionFile string
+var currentVersion int64
 
 func main () {
 	databaseFolder = os.Getenv("GOPATH") + "/database"
@@ -37,7 +40,6 @@ func main () {
 	}
 
 	// Check current version
-	var currentVersion int64
 	if !FileExists(versionFile) {
 		currentVersion = 0
 	} else {
@@ -66,59 +68,35 @@ func main () {
 		Use:   "up",
 		Short: "Start to exexcute sql file by sequence.",
 		Run: func(cmd *cobra.Command, args []string) {
-			tx, err := db.Begin()
-			if err != err {
-				panic(err)
-			}
-			
-			defer func () {
-				if p := recover(); p != nil {
-					tx.Rollback()
-					panic(p)
+			validate := func(input string) error {
+				match, err := regexp.MatchString(`^[YyNn]{1}`, input)
+				if err != nil {
+					panic(err)
 				}
-			}()
+				if (!match) {
+					return errors.New("Wrong answer")
+				}
+				return nil
+			}
 
-			files, err := ioutil.ReadDir(migrationFolder)
+			prompt := promptui.Prompt{
+				Label: "Are you sure? (Y/n)",
+				Validate: validate,
+			}
+
+			result, err := prompt.Run()
+
 			if err != nil {
-				panic(err)
+				fmt.Printf("Prompt failed %v\n", err)
+				return
 			}
 
-			re := regexp.MustCompile(`(\d+)\.up\.sql`)
-			for _, f := range files {
-				match := re.FindAllStringSubmatch(f.Name(), -1)
-				if len(match) == 0 {
-					continue
-				}
-
-				version, err := strconv.ParseInt(match[0][1], 10, 64)
-				if err != nil {
-					panic(err)
-				}
-
-				if version <= currentVersion {
-					continue
-				}
-
-				fullFilePath := migrationFolder + "/" + f.Name()
-				fmt.Println(fullFilePath)
-
-				content, err := ioutil.ReadFile(fullFilePath)
-				if err != nil {
-					panic(err)
-				}
-
-				result, err := db.Exec(string(content))
-				if err != nil {
-					panic(err)
-				}
-
-				if _, err := result.RowsAffected(); err != nil {
-					panic(err)
-				}
-				UpdateVersionNumber(version)
+			if (result == "N" || result == "n") {
+				// Stop execute!
+				return
 			}
 
-			err = tx.Commit()
+			RunMigrate()
 		},
 	}
 
@@ -126,6 +104,34 @@ func main () {
 		Use:   "down",
 		Short: "Rollback migraion",
 		Run: func(cmd *cobra.Command, args []string) {
+			validate := func(input string) error {
+				match, err := regexp.MatchString(`^[YyNn]{1}`, input)
+				if err != nil {
+					panic(err)
+				}
+				if (!match) {
+					return errors.New("Wrong answer")
+				}
+				return nil
+			}
+
+			prompt := promptui.Prompt{
+				Label: "Are you sure? (Y/n)",
+				Validate: validate,
+			}
+
+			result, err := prompt.Run()
+
+			if err != nil {
+				fmt.Printf("Prompt failed %v\n", err)
+				return
+			}
+
+			if (result == "N" || result == "n") {
+				// Stop execute!
+				return
+			}
+
 			tx, err := db.Begin()
 			if err != err {
 				panic(err)
@@ -150,12 +156,7 @@ func main () {
 					panic(err)
 				}
 
-				stmt, err := db.Prepare(string(content))
-				if err != nil {
-					panic(err)
-				}
-
-				result, err := stmt.Exec()
+				result, err := db.Exec(string(content))
 				if err != nil {
 					panic(err)
 				}
@@ -178,6 +179,34 @@ func main () {
 		Use:   "fresh",
 		Short: "Drop all tables and run up sql files",
 		Run: func(cmd *cobra.Command, args []string) {
+			validate := func(input string) error {
+				match, err := regexp.MatchString(`^[YyNn]{1}`, input)
+				if err != nil {
+					panic(err)
+				}
+				if (!match) {
+					return errors.New("Wrong answer")
+				}
+				return nil
+			}
+
+			prompt := promptui.Prompt{
+				Label: "Are you sure? (Y/n)",
+				Validate: validate,
+			}
+
+			result, err := prompt.Run()
+
+			if err != nil {
+				fmt.Printf("Prompt failed %v\n", err)
+				return
+			}
+
+			if (result == "N" || result == "n") {
+				// Stop execute!
+				return
+			}
+
 			stmt, err := db.Prepare("SELECT table_name FROM information_schema.tables WHERE table_schema = ?")
 			if err != nil {
 				panic(err)
@@ -197,11 +226,18 @@ func main () {
 				tables = append(tables, tableName)
 			}
 
-			if len(tables) == 0 {
-				return
+			tablesStr := strings.Join(tables, ", ")
+			fmt.Printf("Drop tables [%s]\n", tablesStr)
+			db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tablesStr))
+
+			if FileExists(versionFile) {
+				if err := os.Remove(versionFile); err != nil {
+					panic(err)
+				}
 			}
 
-			fmt.Printf("Drop tables [%s]\n", strings.Join(tables, ", "))
+			currentVersion = 0
+			RunMigrate()
 		},
 	}
 
@@ -210,6 +246,68 @@ func main () {
 	rootCmd.AddCommand(cmdRollback)
 	rootCmd.AddCommand(cmdFresh)
 	rootCmd.Execute()	
+}
+
+func RunMigrate () {
+	db, err := DbConn()
+	if err != nil {
+		panic(err)
+	}
+
+	defer db.Close()
+
+	tx, err := db.Begin()
+	if err != err {
+		panic(err)
+	}
+	
+	defer func () {
+		if p := recover(); p != nil {
+			tx.Rollback()
+			panic(p)
+		}
+	}()
+
+	files, err := ioutil.ReadDir(migrationFolder)
+	if err != nil {
+		panic(err)
+	}
+
+	re := regexp.MustCompile(`(\d+)\.up\.sql`)
+	for _, f := range files {
+		match := re.FindAllStringSubmatch(f.Name(), -1)
+		if len(match) == 0 {
+			continue
+		}
+
+		version, err := strconv.ParseInt(match[0][1], 10, 64)
+		if err != nil {
+			panic(err)
+		}
+
+		if version <= currentVersion {
+			continue
+		}
+
+		fullFilePath := migrationFolder + "/" + f.Name()
+		fmt.Println(fullFilePath)
+
+		content, err := ioutil.ReadFile(fullFilePath)
+		if err != nil {
+			panic(err)
+		}
+
+		result, err := db.Exec(string(content))
+		if err != nil {
+			panic(err)
+		}
+
+		if _, err := result.RowsAffected(); err != nil {
+			panic(err)
+		}
+		UpdateVersionNumber(version)
+	}
+	err = tx.Commit()
 }
 
 func DbConn () (*sql.DB, error) {
@@ -240,6 +338,7 @@ func GetConfig (key string, defaultValue ...interface {}) (interface {}) {
 func UpdateVersionNumber(number int64) {
 	numberStr := fmt.Sprintf("%d", number)
 	if !FileExists(versionFile) {
+		fmt.Println("create version file")
 		f, err := os.OpenFile(versionFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
 			panic(err)
