@@ -1,4 +1,5 @@
 docker
 src/migrate/vendor
+migrate/vendor
 config/database.env.json
 database/migration/version
