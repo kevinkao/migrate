@@ -132,46 +132,35 @@ func main () {
 				return
 			}
 
-			tx, err := db.Begin()
-			if err != err {
-				panic(err)
-			}
-			
-			defer func () {
-				if p := recover(); p != nil {
-					tx.Rollback()
-					panic(p)
-				}
-			}()
+			WithTransaction (db, func(tx *sql.Tx) (err error) {
+				for v := currentVersion; v > 0; v-- {
+					downfile := fmt.Sprintf("%s/%d.down.sql", migrationFolder, v)
+					if !FileExists(downfile) {
+						panic(fmt.Sprintf("No such %s", downfile))
+					}
+					fmt.Println(downfile)
 
-			for v := currentVersion; v > 0; v-- {
-				downfile := fmt.Sprintf("%s/%d.down.sql", migrationFolder, v)
-				if !FileExists(downfile) {
-					panic(fmt.Sprintf("No such %s", downfile))
-				}
-				fmt.Println(downfile)
+					content, err := ioutil.ReadFile(downfile)
+					if err != nil {
+						panic(err)
+					}
 
-				content, err := ioutil.ReadFile(downfile)
-				if err != nil {
+					result, err := tx.Exec(string(content))
+					if err != nil {
+						panic(err)
+					}
+
+					if _, err := result.RowsAffected(); err != nil {
+						panic(err)
+					}
+					UpdateVersionNumber(v)
+				}
+
+				if err := os.Remove(versionFile); err != nil {
 					panic(err)
 				}
-
-				result, err := db.Exec(string(content))
-				if err != nil {
-					panic(err)
-				}
-
-				if _, err := result.RowsAffected(); err != nil {
-					panic(err)
-				}
-				UpdateVersionNumber(v)
-			}
-
-			if err := os.Remove(versionFile); err != nil {
-				panic(err)
-			}
-
-			err = tx.Commit()
+				return
+			})
 		},
 	}
 
@@ -256,58 +245,49 @@ func RunMigrate () {
 
 	defer db.Close()
 
-	tx, err := db.Begin()
-	if err != err {
-		panic(err)
-	}
-	
-	defer func () {
-		if p := recover(); p != nil {
-			tx.Rollback()
-			panic(p)
-		}
-	}()
-
-	files, err := ioutil.ReadDir(migrationFolder)
-	if err != nil {
-		panic(err)
-	}
-
-	re := regexp.MustCompile(`(\d+)\.up\.sql`)
-	for _, f := range files {
-		match := re.FindAllStringSubmatch(f.Name(), -1)
-		if len(match) == 0 {
-			continue
-		}
-
-		version, err := strconv.ParseInt(match[0][1], 10, 64)
+	WithTransaction (db, func(tx *sql.Tx) (err error) {
+		files, err := ioutil.ReadDir(migrationFolder)
 		if err != nil {
 			panic(err)
 		}
 
-		if version <= currentVersion {
-			continue
+		re := regexp.MustCompile(`(\d+)\.up\.sql`)
+		for _, f := range files {
+			match := re.FindAllStringSubmatch(f.Name(), -1)
+			if len(match) == 0 {
+				continue
+			}
+
+			version, err := strconv.ParseInt(match[0][1], 10, 64)
+			if err != nil {
+				panic(err)
+			}
+
+			if version <= currentVersion {
+				continue
+			}
+
+			fullFilePath := migrationFolder + "/" + f.Name()
+			fmt.Println(fullFilePath)
+
+			content, err := ioutil.ReadFile(fullFilePath)
+			if err != nil {
+				panic(err)
+			}
+
+			result, err := tx.Exec(string(content))
+			if err != nil {
+				panic(err)
+			}
+
+			if _, err := result.RowsAffected(); err != nil {
+				panic(err)
+			}
+			UpdateVersionNumber(version)
 		}
 
-		fullFilePath := migrationFolder + "/" + f.Name()
-		fmt.Println(fullFilePath)
-
-		content, err := ioutil.ReadFile(fullFilePath)
-		if err != nil {
-			panic(err)
-		}
-
-		result, err := db.Exec(string(content))
-		if err != nil {
-			panic(err)
-		}
-
-		if _, err := result.RowsAffected(); err != nil {
-			panic(err)
-		}
-		UpdateVersionNumber(version)
-	}
-	err = tx.Commit()
+		return
+	})
 }
 
 func DbConn () (*sql.DB, error) {
