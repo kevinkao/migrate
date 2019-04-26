@@ -141,7 +141,10 @@ func main () {
 
 				tablesStr := strings.Join(tables, ", ")
 				fmt.Printf("Drop tables [%s]\n", tablesStr)
-				db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tablesStr))
+				db.Exec(fmt.Sprintf(
+					`SET foreign_key_checks=0;
+					DROP TABLE IF EXISTS %s;
+					SET foreign_key_checks=1;`, tablesStr))
 
 				if FileExists(versionFile) {
 					if err := os.Remove(versionFile); err != nil {
